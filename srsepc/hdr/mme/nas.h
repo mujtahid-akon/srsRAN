@@ -224,6 +224,7 @@ public:
                                                   const nas_if_t&         itf);
 
   /* Uplink NAS messages handling */
+  bool send_duplicate_SMC();
   bool handle_attach_request(srsran::byte_buffer_t* nas_rx);
   bool handle_authentication_response(srsran::byte_buffer_t* nas_rx);
   bool handle_security_mode_complete(srsran::byte_buffer_t* nas_rx);
@@ -261,6 +262,7 @@ public:
   ecm_ctx_t m_ecm_ctx                   = {};
   esm_ctx_t m_esm_ctx[MAX_ERABS_PER_UE] = {};
   sec_ctx_t m_sec_ctx                   = {};
+  srsran::unique_byte_buffer_t my_nas_msg = nullptr;
 
 private:
   srslog::basic_logger& m_logger = srslog::fetch_basic_logger("NAS");

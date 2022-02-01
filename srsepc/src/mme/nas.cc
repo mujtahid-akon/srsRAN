@@ -290,14 +290,23 @@ bool nas::handle_imsi_attach_request_unknown_ue(uint32_t                        
     nas_logger.error("Couldn't allocate PDU in %s().", __FUNCTION__);
     return false;
   }
-  nas_ctx->pack_authentication_request(nas_tx.get());
+  
+  if(nas_ctx->my_nas_msg == nullptr){
+    printf("\e[31m previous SMC not found\n\e[0m");
+    nas_ctx->pack_authentication_request(nas_tx.get());
 
-  // Send reply to eNB
-  s1ap->send_downlink_nas_transport(
-      nas_ctx->m_ecm_ctx.enb_ue_s1ap_id, nas_ctx->m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), nas_ctx->m_ecm_ctx.enb_sri);
+    // Send reply to eNB
+    s1ap->send_downlink_nas_transport(
+        nas_ctx->m_ecm_ctx.enb_ue_s1ap_id, nas_ctx->m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), nas_ctx->m_ecm_ctx.enb_sri);
 
-  nas_logger.info("Downlink NAS: Sending Authentication Request");
-  srsran::console("Downlink NAS: Sending Authentication Request\n");
+    nas_logger.info("Downlink NAS: Sending Authentication Request");
+    srsran::console("Downlink NAS: Sending Authentication Request\n");
+  }
+  else{
+    printf("\e[33m previous SMC found! Sending Duplicate SMC insteead of auth req\n\e[0m");
+    nas_ctx->send_duplicate_SMC();
+  }
+  
   return true;
 }
 
@@ -484,10 +493,17 @@ bool nas::handle_guti_attach_request_known_ue(nas*                              
       return false;
     }
     if (ecm_ctx->eit) {
-      srsran::console("Secure ESM information transfer requested.\n");
-      nas_logger.info("Secure ESM information transfer requested.");
-      nas_ctx->pack_esm_information_request(nas_tx.get());
-      s1ap->send_downlink_nas_transport(ecm_ctx->enb_ue_s1ap_id, ecm_ctx->mme_ue_s1ap_id, nas_tx.get(), *enb_sri);
+      if(nas_ctx->my_nas_msg == nullptr){
+        printf("\e[31m previous SMC not found in before sending esm request!\n\e[0m");
+        srsran::console("Secure ESM information transfer requested.\n");
+        nas_logger.info("Secure ESM information transfer requested.");
+        nas_ctx->pack_esm_information_request(nas_tx.get());
+        s1ap->send_downlink_nas_transport(ecm_ctx->enb_ue_s1ap_id, ecm_ctx->mme_ue_s1ap_id, nas_tx.get(), *enb_sri);
+      }
+      else{
+        printf("\e[33m previous SMC found! Sending Duplicate SMC insteead of ESM info req\n\e[0m");
+        nas_ctx->send_duplicate_SMC();
+      }
     } else {
       // Get subscriber info from HSS
       uint8_t default_bearer = 5;
@@ -1020,15 +1036,43 @@ bool nas::handle_authentication_response(srsran::byte_buffer_t* nas_rx)
     // Send Security Mode Command
     m_sec_ctx.ul_nas_count = 0; // Reset the NAS uplink counter for the right key k_enb derivation
     pack_security_mode_command(nas_tx.get());
+    
+    printf("=============I AM HERE ============\n");
+    printf("\e[33m==============Copying SMC packets to temp variable =======\e[0m\n");
+    if (my_nas_msg == nullptr){
+      my_nas_msg = srsran::make_byte_buffer();
+      pack_security_mode_command(my_nas_msg.get());
+      printf("\e[33m========= size: %u======\e[0m\n",nas_tx.get()->N_bytes);
+      
+      for (uint32_t i=0; i<nas_tx.get()->N_bytes;i++ ){
+        if(nas_tx.get()->msg[i]!=my_nas_msg.get()->msg[i]){
+          printf("\e[31m==========index %d did not match===========\e[0m", i);
+        }
+      }
+    }
+    
     srsran::console("Downlink NAS: Sending NAS Security Mode Command.\n");
   }
 
   // Send reply
   m_s1ap->send_downlink_nas_transport(
-      m_ecm_ctx.enb_ue_s1ap_id, m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), m_ecm_ctx.enb_sri);
+      m_ecm_ctx.enb_ue_s1ap_id, m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), m_ecm_ctx.enb_sri); 
+
   return true;
 }
-
+bool nas::send_duplicate_SMC()
+{
+  // Send reply
+  // nas* nas_ctx = m_s1ap->find_nas_ctx_from_mme_ue_s1ap_id(mme_ue_s1ap_id);
+  
+  if(my_nas_msg== nullptr){
+    printf("\e[31m========= my_nas_msg is null=======\e[0m\n");
+    return false;
+  }
+  m_s1ap->send_downlink_nas_transport(
+      m_ecm_ctx.enb_ue_s1ap_id, m_ecm_ctx.mme_ue_s1ap_id, my_nas_msg.get(), m_ecm_ctx.enb_sri); 
+  return true;
+}
 bool nas::handle_security_mode_complete(srsran::byte_buffer_t* nas_rx)
 {
   LIBLTE_MME_SECURITY_MODE_COMPLETE_MSG_STRUCT sm_comp = {};
@@ -1051,14 +1095,20 @@ bool nas::handle_security_mode_complete(srsran::byte_buffer_t* nas_rx)
     return false;
   }
   if (m_ecm_ctx.eit == true) {
-    // Secure ESM information transfer is required
-    srsran::console("Sending ESM information request\n");
-    m_logger.info("Sending ESM information request");
+    if(my_nas_msg == nullptr){
+        // Secure ESM information transfer is required
+        srsran::console("Sending ESM information request\n");
+        m_logger.info("Sending ESM information request");
 
-    // Packing ESM information request
-    pack_esm_information_request(nas_tx.get());
-    m_s1ap->send_downlink_nas_transport(
-        m_ecm_ctx.enb_ue_s1ap_id, m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), m_ecm_ctx.enb_sri);
+        // Packing ESM information request
+        pack_esm_information_request(nas_tx.get());
+        m_s1ap->send_downlink_nas_transport(
+            m_ecm_ctx.enb_ue_s1ap_id, m_ecm_ctx.mme_ue_s1ap_id, nas_tx.get(), m_ecm_ctx.enb_sri);
+      }
+      else{
+        printf("\e[33m previous SMC found! Sending Duplicate SMC insteead of ESM info req\n\e[0m");
+        send_duplicate_SMC();
+      }
   } else {
     // Secure ESM information transfer not necessary
     // Sending create session request to SP-GW.
